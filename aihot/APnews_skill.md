@@ -82,6 +82,7 @@ APnews_YYYYMMDD_HHMM.md
 2. 使用 `curl` 下载 AMP 页面 HTML（AMP 页面为服务端渲染，内容完整嵌入 HTML）
 3. 使用 Python BeautifulSoup 解析 `<div class="RichTextStoryBody">` 容器，提取所有 `<p>`、`<h2>`、`<h3>` 标签文本
 4. 移除干扰节点：`#ap-readmore-embed`、`.ap-readmore-fade`、`.FreeStar` 广告容器
+5. 如果使用 AMP 方案无法获取，可以 fallback 到 webfetch 方法提取头条新闻的部分信息。并在简报最后注明。
 
 **Python 解析脚本模板：**
 
