@@ -71,17 +71,57 @@ APnews_YYYYMMDD_HHMM.md
 - 1-2 句简要描述
 - 完整文章链接 URL
 
-### 第二步：获取头条详情
+### 第二步：获取头条详情（AMP 方案）
 
-对排名第 1 的头条文章，使用 `WebFetch` 访问其详情页 URL，提取：
+> ⚠️ **重要**：AP News 详情页采用客户端渲染（React/Brightspot），内容通过 JS 动态加载。直接 WebFetch 普通页面仅能获取 og:meta 元数据，正文无法完整提取。此外，AP News 在移动端（≤767px）设有 Read More 折叠机制，但该机制并非付费墙 —— 内容实际存在于 HTML 中，仅被 CSS 隐藏。
 
-- 完整标题
-- 作者（byline）
-- 发布日期/时间
-- **文章全文核心内容**：关键引述、事件背景、各方立场、数据与事实
-- 若文章被截断或付费墙限制，在摘要中标注 `⚠️ 部分内容因访问限制无法获取`
+**推荐方案：使用 AMP 版本 + HTML 解析**
 
-> ⚠️ 注意：AP News 部分文章可能因付费墙导致正文截断。此时应基于可获取的全部内容（标题、引语、相关链接描述、视频标题等）进行最大程度的信息整合，并在摘要末尾如实说明限制。
+1. 将头条文章链接转换为 AMP URL：在原 URL 后追加 `?outputType=amp`
+   - 示例：`https://apnews.com/article/xxx` → `https://apnews.com/article/xxx?outputType=amp`
+2. 使用 `curl` 下载 AMP 页面 HTML（AMP 页面为服务端渲染，内容完整嵌入 HTML）
+3. 使用 Python BeautifulSoup 解析 `<div class="RichTextStoryBody">` 容器，提取所有 `<p>`、`<h2>`、`<h3>` 标签文本
+4. 移除干扰节点：`#ap-readmore-embed`、`.ap-readmore-fade`、`.FreeStar` 广告容器
+
+**Python 解析脚本模板：**
+
+```python
+import subprocess, sys
+from bs4 import BeautifulSoup
+
+amp_url = f"{ARTICLE_URL}?outputType=amp"
+html = subprocess.check_output(
+    ["curl", "-sL", "--max-time", "30",
+     "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/125.0.0.0 Mobile Safari/537.36",
+     amp_url]
+).decode("utf-8")
+
+soup = BeautifulSoup(html, 'html.parser')
+article_body = soup.find('div', class_='RichTextStoryBody')
+
+# 清理干扰节点
+for tag in article_body.find_all(['script', 'style', 'template', 'noscript']):
+    tag.decompose()
+for node in article_body.select('#ap-readmore-embed, .ap-readmore-fade, .FreeStar'):
+    node.decompose()
+
+# 提取段落
+paragraphs = []
+for tag in article_body.find_all(['p', 'h2', 'h3', 'h4']):
+    text = tag.get_text().strip()
+    if len(text) > 30:
+        paragraphs.append(text)
+
+full_text = '\n\n'.join(paragraphs)
+```
+
+**提取内容包含：**
+- 完整标题（从 `<title>` 标签）
+- 作者（从 og:meta `article:author` 或 JSON-LD）
+- 发布日期（从 `article:published_time` meta）
+- 文章全文（Read More 之后的内容一并提取）
+
+> 注意：AMP 页面不含 Read More 截断 —— Read More 仅在移动端（≤767px）通过 JS 隐藏后续元素，AMP HTML 中内容完整可见。
 
 ### 第三步：编译简报
 
@@ -124,9 +164,8 @@ APnews_YYYYMMDD_HHMM.md
 2. **头条必须进入详情页**获取深度内容
 3. **所有新闻必须附带原文链接**
 4. **时间戳使用 GMT+8**，精确到分钟
-5. 如实标注内容获取限制（如付费墙截断）
-6. 文件保存后立即向用户展示结果
-7. 回复中仅报告执行结果（成功/失败），不展示完整内容
+5. 文件保存后立即向用户展示结果
+6. 回复中仅报告执行结果（成功/失败），不展示完整内容
 
 ### ❌ 不应做的
 1. **不要跳过头条详情页抓取**——仅用首页摘要是不够的
@@ -142,8 +181,8 @@ APnews_YYYYMMDD_HHMM.md
 ## 完整执行流程
 
 ```
-1. WebFetch(https://apnews.com/)     → 获取 6-8 条头条列表
-2. WebFetch(头条#1详情URL)            → 获取深度内容
+1. WebFetch(https://apnews.com/)                           → 获取 6-8 条头条列表
+2. curl(头条#1详情URL?outputType=amp) + BeautifulSoup      → 获取完整文章
 3. 整合 → 编译 Markdown
 4. Write(/workspace/APnews_日期_时间.md)
 5. open_result_view → 展示文件
