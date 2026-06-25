@@ -1,34 +1,144 @@
 # AP News 每日新闻简报生成器
 
-## 概述
+## 1. 概述
 
-从 [AP News](https://apnews.com/) 首页抓取当日头条新闻，生成结构化的中文 Markdown 简报文件（含头条深度摘要），并自动生成语音播报 MP3。
+从 [AP News](https://apnews.com/) 首页抓取当日头条新闻，生成结构化中文 Markdown 简报，并自动生成语音播报 MP3。
 
-最终产物：
-- `APnews_YYYYMMDD_HHMM.md` — 新闻简报
-- `APnews_YYYYMMDD_HHMM.mp3` — 语音播报
+**工作文件夹**: 使用当前 AI agent 的工作目录，或由其他工具告知的交付文件夹，确保将最终产物提交给用户。
 
----
+**最终产物**:
+新闻简报（中英双语、含原文链接）: `APnews_YYYYMMDD_HHMM.md`
+语音播报 : `APnews_YYYYMMDD_HHMM.mp3`
 
-## 输出文件规范
-
-### 文件名
-
-```
-APnews_YYYYMMDD_HHMM.md
-APnews_YYYYMMDD_HHMM.mp3
-```
-
-- `YYYYMMDD`: 当前日期（如 `20260617`）
-- `HHMM`: 当前时间 GMT+8（如 `0828`）
-- 示例: `APnews_20260617_0828.md`、`APnews_20260617_0828.mp3`
-- 保存到: 工作文件夹
+**文件名格式**: `YYYYMMDD` = 当前日期（GMT+8），`HHMM` = 当前时间（GMT+8）
+示例: `APnews_20260625_2250.md`、`APnews_20260625_2250.mp3`
 
 ---
 
-## 一、新闻简报（.md）
+## 2. 环境准备
 
-### 文件结构
+所有操作前，统一检查并安装 Python 依赖：
+
+```bash
+pip3 install beautifulsoup4 edge-tts --quiet
+```
+
+如已安装则自动跳过。若 `pip3` 不可用，尝试 `pip` 或 `python -m pip`。确认 `curl` 命令可用（通常系统自带）。
+
+---
+
+## 3. 新闻抓取与简报生成
+
+### 3.1 首页抓取（curl + BeautifulSoup）
+
+**步骤 A：curl 下载首页 HTML** 参考代码：
+
+```bash
+curl -sL --max-time 30 \
+  -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
+  "https://apnews.com/" \
+  -o apnews_home.html
+```
+
+**步骤 B：BeautifulSoup 解析提取新闻列表** 参考代码：
+
+```python
+from bs4 import BeautifulSoup
+
+with open('apnews_home.html', 'r', encoding='utf-8') as f:
+    html = f.read()
+
+soup = BeautifulSoup(html, 'html.parser')
+
+article_links = []
+for a in soup.find_all('a', href=True):
+    href = a['href']
+    if '/article/' in href and not href.startswith('#'):
+        if href.startswith('/'):
+            href = 'https://apnews.com' + href
+        title = a.get_text(strip=True)
+        if len(title) < 10:
+            h = a.find(['h1', 'h2', 'h3', 'h4'])
+            if h:
+                title = h.get_text(strip=True)
+        if title and len(title) > 10:
+            article_links.append({'title': title, 'url': href})
+
+# 去重，按出现顺序保留前 6-8 条
+seen = set()
+unique_articles = []
+for a in article_links:
+    if a['url'] not in seen:
+        seen.add(a['url'])
+        unique_articles.append(a)
+
+articles = unique_articles[:8]
+```
+
+**提取规则**：
+- 排名第 1 条为头条（最显著位置）
+- 后续 5-7 条为重要新闻
+- 每条包含：英文原标题 + 文章链接
+
+---
+
+### 3.2 头条详情获取（AMP 方案）
+
+**仅对排名第一的头条**进入详情页获取深度内容。
+
+将头条链接转换为 AMP URL（追加 `?outputType=amp`），使用 curl + BeautifulSoup 解析：参考代码：
+
+```python
+import subprocess
+from bs4 import BeautifulSoup
+
+amp_url = f"{TOP_ARTICLE_URL}?outputType=amp"
+html = subprocess.check_output(
+    ["curl", "-sL", "--max-time", "30",
+     "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36",
+     amp_url]
+).decode("utf-8")
+
+soup = BeautifulSoup(html, 'html.parser')
+article_body = soup.find('div', class_='RichTextStoryBody')
+
+# 清理干扰节点
+for tag in article_body.find_all(['script', 'style', 'template', 'noscript']):
+    tag.decompose()
+for node in article_body.select('#ap-readmore-embed, .ap-readmore-fade, .FreeStar'):
+    node.decompose()
+
+# 提取正文段落
+paragraphs = []
+for tag in article_body.find_all(['p', 'h2', 'h3', 'h4']):
+    text = tag.get_text().strip()
+    if len(text) > 30:
+        paragraphs.append(text)
+
+full_text = '\n\n'.join(paragraphs)
+```
+
+**提取内容**：完整标题（`<title>`）、作者（`article:author` meta）、发布日期（`article:published_time`）、文章全文。
+
+**Fallback**：若 AMP 方案失败，使用 WebFetch 获取头条部分信息，并在简报末尾注明。
+
+---
+
+### 3.3 编译产出（.md 简报 + .txt 录音稿）
+
+使用同一组新闻数据，生成两份文件：
+
+| 要素 | .md 简报 | .txt 录音稿 |
+|------|----------|:----------:|
+| 中文标题 | ✅ | ✅ |
+| 英文原标题 | ✅（blockquote） | — |
+| 作者 / 时间戳 | ✅ | — |
+| 原文链接 | ✅ | — |
+| 正文摘要 | ✅ | ✅ |
+| Markdown 标记 | ✅ | —（纯文本）|
+| 编号格式 | `### N.` | `N、` |
+
+**.md 简报模板**：
 
 ```markdown
 # AP News 新闻简报
@@ -64,82 +174,7 @@ APnews_YYYYMMDD_HHMM.mp3
 🔗 [阅读全文](URL)
 ```
 
----
-
-## 二、内容获取方法
-
-### 第一步：抓取首页头条
-
-使用 `WebFetch` 访问 `https://apnews.com/`，提取以下内容（按首页展示的显著性排序）：
-
-1. 排名第 1 的头条（最显著位置）
-2. 后续 5-7 条重要新闻（共 6-8 条）
-
-每条需获取：
-- 英文原标题
-- 1-2 句简要描述
-- 完整文章链接 URL
-
-### 第二步：获取头条详情（AMP 方案）
-
-**推荐方案：使用 AMP 版本 + HTML 解析**
-
-1. 将头条文章链接转换为 AMP URL：在原 URL 后追加 `?outputType=amp`
-   - 示例：`https://apnews.com/article/xxx` → `https://apnews.com/article/xxx?outputType=amp`
-2. 使用 `curl` 下载 AMP 页面 HTML（AMP 页面为服务端渲染，内容完整嵌入 HTML）
-3. 使用 Python BeautifulSoup 解析 `<div class="RichTextStoryBody">` 容器，提取所有 `<p>`、`<h2>`、`<h3>` 标签文本
-4. 移除干扰节点：`#ap-readmore-embed`、`.ap-readmore-fade`、`.FreeStar` 广告容器
-5. 如果使用 AMP 方案无法获取，可以 fallback 到 webfetch 方法提取头条新闻的部分信息。并在简报最后注明。
-
-**Python 解析脚本模板：**
-
-```python
-import subprocess, sys
-from bs4 import BeautifulSoup
-
-amp_url = f"{ARTICLE_URL}?outputType=amp"
-html = subprocess.check_output(
-    ["curl", "-sL", "--max-time", "30",
-     "-H", "User-Agent: Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/125.0.0.0 Mobile Safari/537.36",
-     amp_url]
-).decode("utf-8")
-
-soup = BeautifulSoup(html, 'html.parser')
-article_body = soup.find('div', class_='RichTextStoryBody')
-
-# 清理干扰节点
-for tag in article_body.find_all(['script', 'style', 'template', 'noscript']):
-    tag.decompose()
-for node in article_body.select('#ap-readmore-embed, .ap-readmore-fade, .FreeStar'):
-    node.decompose()
-
-# 提取段落
-paragraphs = []
-for tag in article_body.find_all(['p', 'h2', 'h3', 'h4']):
-    text = tag.get_text().strip()
-    if len(text) > 30:
-        paragraphs.append(text)
-
-full_text = '\n\n'.join(paragraphs)
-```
-
-**提取内容包含：**
-- 完整标题（从 `<title>` 标签）
-- 作者（从 og:meta `article:author` 或 JSON-LD）
-- 发布日期（从 `article:published_time` meta）
-- 文章全文（Read More 之后的内容一并提取）
-
-### 第三步：编译简报
-
-按照文件模板格式，将所有信息整合为完整的 Markdown 文件，保存为 `APnews_YYYYMMDD_HHMM.md`。
-
----
-
-## 三、语音播报（.mp3）
-
-### 第四步：生成文字播报稿
-
-从简报内容生成纯文本播报稿，格式如下：
+**.txt 录音稿格式**：
 
 ```text
 AP News 新闻播报
@@ -154,105 +189,58 @@ AP News 新闻播报
 ...
 ```
 
-**播报稿生成规则：**
+**录音稿规则**：
+- 编号使用 `N、`（中文顿号），**禁止 `N.`**——edge-tts 对 `1.` 会连读（如"一委内瑞拉"），`1、` 则产生清晰停顿
+- 不使用"接下来""欢迎收听"等连接词；开头仅两行标题和时间
+- 头条完整 300-500 字，其他新闻 1-2 句；不出现任何链接
 
-1. **舍弃**：作者名、英文原标题、文章时间戳、原文链接、所有 Markdown 标记（`#`、`**`、`>` 等）
-2. **编号格式**：使用 `N、`（数字 + 中文顿号），**禁止使用 `N.`（数字 + 英文句点）**。`、` 号可使 TTS 引擎在编号和标题之间产生自然停顿，避免连读
-3. **无连接词**：不使用"接下来""下面是""欢迎收听"等任何连接词和语气词
-4. **开头**：仅一行标题「AP News 新闻播报」，第二行「简报时间为XXXX年XX月XX日XX时XX分」，随后空一行直接开始编号正文
-5. **头条**：保留完整 300-500 字深度摘要
-6. **其他新闻**：保留 1-2 句简明摘要
-7. 播报稿中不出现任何链接。
+---
 
-> ⚠️ **编号格式说明**：edge-tts 对 `1.` 的朗读会将数字与后续文字连读（如"一委内瑞拉"），使用 `1、` 则 TTS 朗读为"一、委内瑞拉……"，在编号与标题之间产生清晰的停顿边界。
+## 4. 语音播报生成
 
-### 第五步：生成语音 MP3
+使用 edge-tts 直接生成 MP3，**不使用 ffmpeg**。
 
-**前提**：先安装 python edge-tts：示例：
 ```bash
-sudo pip3 install edge-tts --break-system-packages 
+edge-tts --voice zh-CN-YunyangNeural --rate "+33%" \
+  -f 录音稿.txt \
+  --write-media APnews_YYYYMMDD_HHMM.mp3
 ```
-
-**生成语音**：示例：
-```bash
-edge-tts --voice zh-CN-YunyangNeural --rate "+33%" -f /workspace/APnews_YYYYMMDD_HHMM_broadcast.txt --write-media /workspace/APnews_YYYYMMDD_HHMM.mp3
-```
-
-> 注意：`.txt` 播报稿为中间产物，最终只保留 `.md` 简报和 `.mp3` 语音两个文件。
-
-### TTS 参数说明
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
 | 语音 | `zh-CN-YunyangNeural` | 男声新闻播报风格 |
 | 语速 | `+33%` | 加速 33%，适合新闻播报节奏 |
 
----
-
-## 写作与排版规范
-
-### 标题处理
-- **简报中必须同时提供中文翻译和英文原文**
-- 中文标题在前（大标题），英文原文以 blockquote 形式紧随其后
-- 中文标题应准确传达原意，不添加主观评论
-
-### 文笔要求
-- 简洁、客观、新闻语体
-- 不使用第一人称（"我""我们"）
-- 不使用情感化表达（如"令人震惊""不可思议"）
-- 关键术语首次出现时保留英文原文（如 Strait of Hormuz / 霍尔木兹海峡）
-
-### 排版规则
-- 使用 GitHub-flavored Markdown
-- 层级清晰：`#` → `##` → `###` → `####`
-- 每条新闻之间用 `---` 分隔
-- 链接用 `🔗 [阅读全文](URL)` 格式
-- 使用 blockquote（`>`）标注英文原标题和直接引语
-- 头条摘要中使用 **粗体** 突出关键事实和数据
-- 时间始终显示为 GMT+8
-
-### 摘要深度
-- **简报头条**: 300-500字的综合分析，包含：事件核心、各方立场、直接引语、背景关联、影响分析
-- **简报其他新闻**: 1-2 句简明摘要
+生成 MP3 后删除 `.txt` 录音稿及 `apnews_home.html` 临时文件，最终仅保留 `.md` 和 `.mp3` 两个产物。
 
 ---
 
-## 行为准则
+## 5. 写作规范与行为准则
 
-### ✅ 应当做的
-1. **先抓首页再取详情**，分步进行
-2. **头条必须进入详情页**获取深度内容，其他新闻可以不进入详情页，根据首页摘要提供信息即可
-3. **所有新闻必须附带原文链接**（见于简报 .md 中）
-4. **时间戳使用 GMT+8**，精确到分钟
-5. 文件保存后立即向用户展示结果
-6. 回复中仅报告执行结果（成功/失败），不展示摘要和完整内容
-7. **播报稿编号必须使用中文顿号 `N、`**，禁止英文句点 `N.`
-8. **最终只保留两个文件**：`.md` 简报 + `.mp3` 语音，清理所有中间产物
+### 写作规范
 
-### ❌ 不应做的
-1. **不要跳过头条详情页抓取**——仅用首页摘要是不够的
-2. **不要遗漏英文原标题**（简报中）——每条新闻必须中英对照
-3. **不要添加主观评论或价值判断**
-4. **不要修改 AP News 原意**——翻译应忠实于原文
-5. **不要保留中间产物**（.txt 播报稿、_tmp.mp3 等）——最终仅保留 .md 和 .mp3
-6. **不要在回复中重复全部简报内容**——用户直接查看文件即可
-7. **不要安装此 skill 文件**——仅供其他 agent 阅读理解
-8. **播报稿编号不要使用 `N.`**——TTS 会连读，必须使用 `N、`
+1. **中英对照**：每条新闻必须同时提供中文翻译和英文原文（.md 简报中）
+2. **客观中立**：不添加主观评论、价值判断或情感化表达；不用"我们""令人震惊"等词
+3. **术语处理**：关键术语首次出现时注明英文原文（如 Strait of Hormuz / 霍尔木兹海峡）
+4. **摘要深度**：头条 300-500 字综合分析（事件核心、各方立场、背景、影响）；其他新闻 1-2 句
 
----
+### 行为准则
 
-## 完整执行流程
+**✅ 应当做的**：
 
-```
-1. WebFetch(https://apnews.com/)                              → 获取 6-8 条头条列表
-2. curl(头条#1详情URL?outputType=amp) + BeautifulSoup         → 获取完整文章
-3. 整合 → 编译 Markdown → Write(APnews_日期_时间.md)           → 新闻简报
-4. 从 .md 内容生成播报稿 → Write(APnews_日期_时间_broadcast.txt)
-5. edge-tts 生成语音 →  Write(APnews_日期_时间.mp3)
-6. 清理中间文件（_broadcast.txt）
-7. open_result_view → 展示 .md 和 .mp3 两个文件
-8. 回复: "成功执行。简报保存至 [.md路径]，语音播报保存至 [.mp3路径]。"
-```
+1. 分步执行：先抓首页列表，再取头条详情
+2. 进入头条新闻详情页获取深度内容
+3. 所有新闻附带原文链接（.md 简报中）
+4. 回复中仅报告执行结果，不重复简报内容
+5. 最终仅保留 .md 和 .mp3 两个文件，清理所有中间产物。根据系统提示或其他工具要求，确保产物文件提交。
+
+**❌ 不应做的**：
+
+1. 不遗漏英文原标题（.md 简报中）
+2. 不添加主观评论或篡改原文原意
+3. 不保留中间产物（.txt 录音稿、临时 HTML 等）
+4. 不跳过详情页直接用首页摘要写头条
+5. 不编造链接——每条链接必须来自实际抓取
 
 ---
 
