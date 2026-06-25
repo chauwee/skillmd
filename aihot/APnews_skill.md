@@ -2,7 +2,11 @@
 
 ## 概述
 
-从 [AP News](https://apnews.com/) 首页抓取当日头条新闻，生成结构化的中文 Markdown 简报文件，含头条深度摘要。
+从 [AP News](https://apnews.com/) 首页抓取当日头条新闻，生成结构化的中文 Markdown 简报文件（含头条深度摘要），并自动生成语音播报 MP3。
+
+最终产物：
+- `APnews_YYYYMMDD_HHMM.md` — 新闻简报
+- `APnews_YYYYMMDD_HHMM.mp3` — 语音播报
 
 ---
 
@@ -12,12 +16,17 @@
 
 ```
 APnews_YYYYMMDD_HHMM.md
+APnews_YYYYMMDD_HHMM.mp3
 ```
 
 - `YYYYMMDD`: 当前日期（如 `20260617`）
 - `HHMM`: 当前时间 GMT+8（如 `0828`）
-- 示例: `APnews_20260617_0828.md`
+- 示例: `APnews_20260617_0828.md`、`APnews_20260617_0828.mp3`
 - 保存路径: `/workspace/`
+
+---
+
+## 一、新闻简报（.md）
 
 ### 文件结构
 
@@ -57,7 +66,7 @@ APnews_YYYYMMDD_HHMM.md
 
 ---
 
-## 内容获取方法
+## 二、内容获取方法
 
 ### 第一步：抓取首页头条
 
@@ -126,14 +135,79 @@ full_text = '\n\n'.join(paragraphs)
 
 ### 第三步：编译简报
 
-按照文件模板格式，将所有信息整合为完整的 Markdown 文件。
+按照文件模板格式，将所有信息整合为完整的 Markdown 文件，保存为 `APnews_YYYYMMDD_HHMM.md`。
+
+---
+
+## 三、语音播报（.mp3）
+
+### 第四步：生成文字播报稿
+
+从简报内容生成纯文本播报稿，格式如下：
+
+```text
+AP News 新闻播报稿
+简报时间为XXXX年XX月XX日XX时XX分
+
+1、[中文标题]
+[正文内容]
+
+2、[中文标题]
+[正文内容]
+
+...
+```
+
+**播报稿生成规则：**
+
+1. **舍弃**：作者名、英文原标题、文章时间戳、原文链接、所有 Markdown 标记（`#`、`**`、`>` 等）
+2. **编号格式**：使用 `N、`（数字 + 中文顿号），**禁止使用 `N.`（数字 + 英文句点）**。`、` 号可使 TTS 引擎在编号和标题之间产生自然停顿，避免连读
+3. **无连接词**：不使用"接下来""下面是""欢迎收听"等任何连接词和语气词
+4. **开头**：仅一行标题「AP News 新闻播报稿」，第二行「简报时间为XXXX年XX月XX日XX时XX分」，随后空一行直接开始编号正文
+5. **头条**：保留完整 300-500 字深度摘要
+6. **其他新闻**：保留 1-2 句简明摘要
+7. 播报稿中不出现任何链接、不出现英文
+
+> ⚠️ **编号格式说明**：edge-tts 对 `1.` 的朗读会将数字与后续文字连读（如"一点委内瑞拉"），使用 `1、` 则 TTS 朗读为"一、委内瑞拉……"，在编号与标题之间产生清晰的停顿边界。
+
+### 第五步：生成语音 MP3
+
+**前提**：先安装 edge-tts：
+```bash
+sudo pip3 install edge-tts --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+**生成语音**：
+```bash
+edge-tts --voice zh-CN-YunyangNeural --rate "+33%" -f /workspace/APnews_YYYYMMDD_HHMM_broadcast.txt --write-media /workspace/APnews_YYYYMMDD_HHMM_tmp.mp3
+```
+
+**压缩码率至 48kbps**（edge-tts 默认码率较高，须用 ffmpeg 转码）：
+```bash
+ffmpeg -i /workspace/APnews_YYYYMMDD_HHMM_tmp.mp3 -b:a 48k -y /workspace/APnews_YYYYMMDD_HHMM.mp3
+```
+
+**清理中间文件**：
+```bash
+rm /workspace/APnews_YYYYMMDD_HHMM_broadcast.txt /workspace/APnews_YYYYMMDD_HHMM_tmp.mp3
+```
+
+> 注意：`.txt` 播报稿和 `_tmp.mp3` 均为中间产物，最终只保留 `.md` 简报和 `.mp3` 语音两个文件。
+
+### TTS 参数说明
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| 语音 | `zh-CN-YunyangNeural` | 男声新闻播报风格 |
+| 语速 | `+33%` | 加速 33%，适合新闻播报节奏 |
+| 输出码率 | 48kbps | 通过 ffmpeg 转码压缩 |
 
 ---
 
 ## 写作与排版规范
 
 ### 标题处理
-- **必须同时提供中文翻译和英文原文**
+- **简报中必须同时提供中文翻译和英文原文**
 - 中文标题在前（大标题），英文原文以 blockquote 形式紧随其后
 - 中文标题应准确传达原意，不添加主观评论
 
@@ -153,8 +227,8 @@ full_text = '\n\n'.join(paragraphs)
 - 时间始终显示为 GMT+8
 
 ### 摘要深度
-- **头条**: 300-500字的综合分析，包含：事件核心、各方立场、直接引语、背景关联、影响分析
-- **其他新闻**: 1-2 句简明摘要
+- **简报头条**: 300-500字的综合分析，包含：事件核心、各方立场、直接引语、背景关联、影响分析
+- **简报其他新闻**: 1-2 句简明摘要
 
 ---
 
@@ -163,31 +237,36 @@ full_text = '\n\n'.join(paragraphs)
 ### ✅ 应当做的
 1. **先抓首页再取详情**，分步进行
 2. **头条必须进入详情页**获取深度内容，其他新闻可以不进入详情页，根据首页摘要提供信息即可
-3. **所有新闻必须附带原文链接**
+3. **所有新闻必须附带原文链接**（见于简报 .md 中）
 4. **时间戳使用 GMT+8**，精确到分钟
 5. 文件保存后立即向用户展示结果
 6. 回复中仅报告执行结果（成功/失败），不展示完整内容
+7. **播报稿编号必须使用中文顿号 `N、`**，禁止英文句点 `N.`
+8. **最终只保留两个文件**：`.md` 简报 + `.mp3` 语音，清理所有中间产物
 
 ### ❌ 不应做的
 1. **不要跳过头条详情页抓取**——仅用首页摘要是不够的
-2. **不要遗漏英文原标题**——每条新闻必须中英对照
+2. **不要遗漏英文原标题**（简报中）——每条新闻必须中英对照
 3. **不要添加主观评论或价值判断**
 4. **不要修改 AP News 原意**——翻译应忠实于原文
-5. **不要创建额外文件**（如 JSON、HTML）——仅输出一个 .md
+5. **不要保留中间产物**（.txt 播报稿、_tmp.mp3 等）——最终仅保留 .md 和 .mp3
 6. **不要在回复中重复全部简报内容**——用户直接查看文件即可
 7. **不要安装此 skill 文件**——仅供其他 agent 阅读理解
+8. **播报稿编号不要使用 `N.`**——TTS 会连读，必须使用 `N、`
 
 ---
 
 ## 完整执行流程
 
 ```
-1. WebFetch(https://apnews.com/)                           → 获取 6-8 条头条列表
-2. curl(头条#1详情URL?outputType=amp) + BeautifulSoup      → 获取完整文章
-3. 整合 → 编译 Markdown
-4. Write(/workspace/APnews_日期_时间.md)
-5. open_result_view → 展示文件
-6. 回复: "成功执行。简报已保存至 [路径]。"
+1. WebFetch(https://apnews.com/)                              → 获取 6-8 条头条列表
+2. curl(头条#1详情URL?outputType=amp) + BeautifulSoup         → 获取完整文章
+3. 整合 → 编译 Markdown → Write(APnews_日期_时间.md)           → 新闻简报
+4. 从 .md 内容生成播报稿 → Write(APnews_日期_时间_broadcast.txt)
+5. edge-tts 生成语音 → ffmpeg 压缩 48kbps → Write(APnews_日期_时间.mp3)
+6. 清理中间文件（_broadcast.txt、_tmp.mp3）
+7. open_result_view → 展示 .md 和 .mp3 两个文件
+8. 回复: "成功执行。简报保存至 [.md路径]，语音播报保存至 [.mp3路径]。"
 ```
 
 ---
