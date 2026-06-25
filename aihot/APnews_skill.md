@@ -22,7 +22,7 @@ APnews_YYYYMMDD_HHMM.mp3
 - `YYYYMMDD`: 当前日期（如 `20260617`）
 - `HHMM`: 当前时间 GMT+8（如 `0828`）
 - 示例: `APnews_20260617_0828.md`、`APnews_20260617_0828.mp3`
-- 保存路径: `/workspace/`
+- 保存到: 工作文件夹
 
 ---
 
@@ -82,8 +82,6 @@ APnews_YYYYMMDD_HHMM.mp3
 
 ### 第二步：获取头条详情（AMP 方案）
 
-> ⚠️ **重要**：AP News 详情页采用客户端渲染（React/Brightspot），内容通过 JS 动态加载。直接 WebFetch 普通页面仅能获取 og:meta 元数据，正文无法完整提取。此外，AP News 在移动端（≤767px）设有 Read More 折叠机制，但该机制并非付费墙 —— 内容实际存在于 HTML 中，仅被 CSS 隐藏。
-
 **推荐方案：使用 AMP 版本 + HTML 解析**
 
 1. 将头条文章链接转换为 AMP URL：在原 URL 后追加 `?outputType=amp`
@@ -131,8 +129,6 @@ full_text = '\n\n'.join(paragraphs)
 - 发布日期（从 `article:published_time` meta）
 - 文章全文（Read More 之后的内容一并提取）
 
-> 注意：AMP 页面不含 Read More 截断 —— Read More 仅在移动端（≤767px）通过 JS 隐藏后续元素，AMP HTML 中内容完整可见。
-
 ### 第三步：编译简报
 
 按照文件模板格式，将所有信息整合为完整的 Markdown 文件，保存为 `APnews_YYYYMMDD_HHMM.md`。
@@ -146,7 +142,7 @@ full_text = '\n\n'.join(paragraphs)
 从简报内容生成纯文本播报稿，格式如下：
 
 ```text
-AP News 新闻播报稿
+AP News 新闻播报
 简报时间为XXXX年XX月XX日XX时XX分
 
 1、[中文标题]
@@ -163,36 +159,26 @@ AP News 新闻播报稿
 1. **舍弃**：作者名、英文原标题、文章时间戳、原文链接、所有 Markdown 标记（`#`、`**`、`>` 等）
 2. **编号格式**：使用 `N、`（数字 + 中文顿号），**禁止使用 `N.`（数字 + 英文句点）**。`、` 号可使 TTS 引擎在编号和标题之间产生自然停顿，避免连读
 3. **无连接词**：不使用"接下来""下面是""欢迎收听"等任何连接词和语气词
-4. **开头**：仅一行标题「AP News 新闻播报稿」，第二行「简报时间为XXXX年XX月XX日XX时XX分」，随后空一行直接开始编号正文
+4. **开头**：仅一行标题「AP News 新闻播报」，第二行「简报时间为XXXX年XX月XX日XX时XX分」，随后空一行直接开始编号正文
 5. **头条**：保留完整 300-500 字深度摘要
 6. **其他新闻**：保留 1-2 句简明摘要
 7. 播报稿中不出现任何链接。
 
-> ⚠️ **编号格式说明**：edge-tts 对 `1.` 的朗读会将数字与后续文字连读（如"一点委内瑞拉"），使用 `1、` 则 TTS 朗读为"一、委内瑞拉……"，在编号与标题之间产生清晰的停顿边界。
+> ⚠️ **编号格式说明**：edge-tts 对 `1.` 的朗读会将数字与后续文字连读（如"一委内瑞拉"），使用 `1、` 则 TTS 朗读为"一、委内瑞拉……"，在编号与标题之间产生清晰的停顿边界。
 
 ### 第五步：生成语音 MP3
 
-**前提**：先安装 edge-tts：
+**前提**：先安装 python edge-tts：示例：
 ```bash
-sudo pip3 install edge-tts --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple
+sudo pip3 install edge-tts --break-system-packages 
 ```
 
-**生成语音**：
+**生成语音**：示例：
 ```bash
-edge-tts --voice zh-CN-YunyangNeural --rate "+33%" -f /workspace/APnews_YYYYMMDD_HHMM_broadcast.txt --write-media /workspace/APnews_YYYYMMDD_HHMM_tmp.mp3
+edge-tts --voice zh-CN-YunyangNeural --rate "+33%" -f /workspace/APnews_YYYYMMDD_HHMM_broadcast.txt --write-media /workspace/APnews_YYYYMMDD_HHMM.mp3
 ```
 
-**压缩码率至 48kbps**（edge-tts 默认码率较高，须用 ffmpeg 转码）：
-```bash
-ffmpeg -i /workspace/APnews_YYYYMMDD_HHMM_tmp.mp3 -b:a 48k -y /workspace/APnews_YYYYMMDD_HHMM.mp3
-```
-
-**清理中间文件**：
-```bash
-rm /workspace/APnews_YYYYMMDD_HHMM_broadcast.txt /workspace/APnews_YYYYMMDD_HHMM_tmp.mp3
-```
-
-> 注意：`.txt` 播报稿和 `_tmp.mp3` 均为中间产物，最终只保留 `.md` 简报和 `.mp3` 语音两个文件。
+> 注意：`.txt` 播报稿为中间产物，最终只保留 `.md` 简报和 `.mp3` 语音两个文件。
 
 ### TTS 参数说明
 
@@ -200,7 +186,6 @@ rm /workspace/APnews_YYYYMMDD_HHMM_broadcast.txt /workspace/APnews_YYYYMMDD_HHMM
 |------|-----|------|
 | 语音 | `zh-CN-YunyangNeural` | 男声新闻播报风格 |
 | 语速 | `+33%` | 加速 33%，适合新闻播报节奏 |
-| 输出码率 | 48kbps | 通过 ffmpeg 转码压缩 |
 
 ---
 
@@ -240,7 +225,7 @@ rm /workspace/APnews_YYYYMMDD_HHMM_broadcast.txt /workspace/APnews_YYYYMMDD_HHMM
 3. **所有新闻必须附带原文链接**（见于简报 .md 中）
 4. **时间戳使用 GMT+8**，精确到分钟
 5. 文件保存后立即向用户展示结果
-6. 回复中仅报告执行结果（成功/失败），不展示完整内容
+6. 回复中仅报告执行结果（成功/失败），不展示摘要和完整内容
 7. **播报稿编号必须使用中文顿号 `N、`**，禁止英文句点 `N.`
 8. **最终只保留两个文件**：`.md` 简报 + `.mp3` 语音，清理所有中间产物
 
@@ -263,8 +248,8 @@ rm /workspace/APnews_YYYYMMDD_HHMM_broadcast.txt /workspace/APnews_YYYYMMDD_HHMM
 2. curl(头条#1详情URL?outputType=amp) + BeautifulSoup         → 获取完整文章
 3. 整合 → 编译 Markdown → Write(APnews_日期_时间.md)           → 新闻简报
 4. 从 .md 内容生成播报稿 → Write(APnews_日期_时间_broadcast.txt)
-5. edge-tts 生成语音 → ffmpeg 压缩 48kbps → Write(APnews_日期_时间.mp3)
-6. 清理中间文件（_broadcast.txt、_tmp.mp3）
+5. edge-tts 生成语音 →  Write(APnews_日期_时间.mp3)
+6. 清理中间文件（_broadcast.txt）
 7. open_result_view → 展示 .md 和 .mp3 两个文件
 8. 回复: "成功执行。简报保存至 [.md路径]，语音播报保存至 [.mp3路径]。"
 ```
